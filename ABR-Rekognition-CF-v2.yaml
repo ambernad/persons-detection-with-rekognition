@@ -1,0 +1,194 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation stack to process surveillance camera screenshots using AWS Rekognition and AWS Glue.
+
+Parameters:
+  RandomSuffix:
+    Type: String
+    Description: Enter a unique random suffix (e.g., "abc123") to ensure resource names are globally unique.
+    AllowedPattern: "^[a-zA-Z0-9]{1,12}$"
+    ConstraintDescription: "The suffix must be alphanumeric and up to 12 characters."
+
+Resources:
+  # S3 Bucket for screenshots
+  ScreenshotsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "abr-screenshots-${RandomSuffix}"
+
+  # S3 Bucket for processed results
+  ResultsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "abr-results-${RandomSuffix}"
+
+  # IAM Role for Lambda
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "abr-lambda-role-${RandomSuffix}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "abr-policy-${RandomSuffix}"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetBucketLocation
+                  - s3:PutObject
+                Resource:
+                  - !Sub arn:aws:s3:::abr-screenshots-${RandomSuffix}/*
+                  - !Sub arn:aws:s3:::abr-results-${RandomSuffix}/*
+              - Effect: Allow
+                Action:
+                  - rekognition:DetectLabels
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - logs:* 
+                Resource: "*"
+
+  # IAM Role for Glue Crawler with two policies as instructed
+  GlueCrawlerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "abr-glue-crawler-role-${RandomSuffix}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole # AWS managed policy for Glue service role
+      Policies:
+        - PolicyName: !Sub "abr-glue-crawler-policy-${RandomSuffix}"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - !Sub arn:aws:s3:::abr-results-${RandomSuffix}/*
+
+  # Lambda Function for processing screenshots with updated code included
+  ProcessScreenshotsLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "abr-process-screenshots-${RandomSuffix}"
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import datetime
+          import csv
+          import io
+
+          def lambda_handler(event, context):
+              s3 = boto3.client('s3')
+              rekognition = boto3.client('rekognition')
+              
+              input_bucket = "abr-screenshots-${RandomSuffix}"
+              output_bucket = "abr-results-${RandomSuffix}"
+              
+              # Check if 'Records' key exists in the event
+              if 'Records' not in event:
+                  return {
+                      'statusCode': 400,
+                      'body': json.dumps("Invalid event structure: 'Records' key is missing.")
+                  }
+              
+              # Prepare CSV data header
+              csv_data = [
+                  ['RestaurantID', 'ScreenshotName', 'Time', 'Date', 'NumberOfPersons', 'CurrentDatetime']
+              ]
+              
+              # Process each file in the event
+              for record in event['Records']:
+                  key = record['s3']['object']['key']
+                  
+                  # Call Rekognition to detect labels in the image
+                  response = rekognition.detect_labels(
+                      Image={'S3Object': {'Bucket': input_bucket, 'Name': key}},
+                      MaxLabels=30,
+                      MinConfidence=60.0,
+                  )
+                  
+                  # Extract person count from Rekognition response
+                  persons_detected = 0
+                  for label in response['Labels']:
+                      if label['Name'] == 'Person':
+                          persons_detected = len(label.get('Instances', []))
+                          break  # No need to check further labels once "Person" is found
+                  
+                  # Parse screenshot name to extract metadata
+                  screenshot_name = key.split('/')[-1]
+                  date_time_str = screenshot_name.split('_')[1] + '_' + screenshot_name.split('_')[2].replace('.jpg', '')
+                  date_time_obj = datetime.datetime.strptime(date_time_str, '%Y-%m-%d_%H-%M-%S')
+                  
+                  # Append data for CSV
+                  csv_data.append([
+                      '1',  # Replace with actual Restaurant ID if available
+                      screenshot_name,
+                      date_time_obj.time().isoformat(),
+                      date_time_obj.date().isoformat(),
+                      persons_detected,
+                      datetime.datetime.now().isoformat()
+                  ])
+              
+              # Write CSV data to an in-memory file
+              csv_buffer = io.StringIO()
+              writer = csv.writer(csv_buffer)
+              writer.writerows(csv_data)
+              
+              # Generate a unique filename for the CSV file
+              csv_filename = f"results_{screenshot_name.replace('.jpg', '')}.csv"
+              
+              # Upload the CSV file to S3
+              s3.put_object(
+                  Bucket=output_bucket,
+                  Key=csv_filename,
+                  Body=csv_buffer.getvalue(),
+                  ContentType='text/csv'
+              )
+              
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps(f"CSV file {csv_filename} has been uploaded successfully.")
+              }
+
+      Timeout: 300
+
+  # Glue Database for results cataloging 
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref "AWS::AccountId"
+      DatabaseInput:
+        Name: !Sub "abr-surveillance-db-${RandomSuffix}"
+
+  # Glue Crawler for results bucket 
+  GlueCrawler:
+    Type: AWS::Glue::Crawler
+    DependsOn:
+      - ResultsBucket       
+    Properties:
+      Name: !Sub "abr-results-crawler-${RandomSuffix}"
+      Role: !GetAtt GlueCrawlerRole.Arn 
+      DatabaseName: !Ref GlueDatabase 
+      Targets:
+        S3Targets:
+          - Path: !Sub "s3://abr-results-${RandomSuffix}/"
