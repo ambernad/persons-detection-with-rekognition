@@ -13,9 +13,10 @@
 </br>Set checkbox for Event type - All object create events
 </br>Set destination - Lambda function and pick abr-process-screenshots-${RandomSuffix} function from drop-down list
 </br>
-4. Put your screenshot to abr-screenshots-${RandomSuffix} bucket using console or API. Check that result reports are created in abr-results-${RandomSuffix} bucket
+4. Go to lambda functions. Replace in the lambda code abr-screenshots-${RandomSuffix} and abr-results-${RandomSuffix}  with real bucket names
+5. Put your screenshot to abr-screenshots-${RandomSuffix} bucket using console or API. Check that result reports are created in abr-results-${RandomSuffix} bucket
 </br>
-5. Go to Glue Crawler abr-results-crawler-${RandomSuffix} and run crawling proccess. Alternatively you can put the crawler on schedule, for example, every hour.
+6. Go to Glue Crawler abr-results-crawler-${RandomSuffix} and run crawling proccess. Alternatively you can put the crawler on schedule, for example, every hour.
 </br>
-6. After crawling completion go Athena. Select abr-surveillance-db-${RandomSuffix} database and launch query on abr-results-${RandomSuffix} table
+7. After crawling completion go Athena. Select abr-surveillance-db-${RandomSuffix} database and launch query on abr-results-${RandomSuffix} table
 
