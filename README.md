@@ -13,7 +13,7 @@
 </br>Set checkbox for Event type - All object create events
 </br>Set destination - Lambda function and pick abr-process-screenshots-${RandomSuffix} function from drop-down list
 </br>
-4. Go to lambda functions. Replace in the lambda code abr-screenshots-${RandomSuffix} and abr-results-${RandomSuffix}  with real bucket names
+4. Go to lambda function. Replace in the lambda code abr-screenshots-${RandomSuffix} and abr-results-${RandomSuffix}  with real bucket names
 </br>
 5. Put your screenshot to abr-screenshots-${RandomSuffix} bucket using console or API. Check that result reports are created in abr-results-${RandomSuffix} bucket
 </br>
